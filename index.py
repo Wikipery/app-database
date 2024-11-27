@@ -1,12 +1,15 @@
+import os
 from dotenv import load_dotenv
 load_dotenv()
-import os
 
-from flask import Flask, request, jsonify
+import gevent
+from gevent import monkey
+monkey.patch_all()
 
-import asyncio
 import httpx
 import urllib.parse
+from bs4 import BeautifulSoup
+from flask import Flask, request, jsonify
 
 SERVICE_POST = os.environ["SERVICE_POST"]
 
@@ -17,18 +20,46 @@ def home():
     return "server is up"
 
 def get_content(title, lang):
-    print(f"we are here")
-    return True
+    """ 
+    Fetching the data content from Wikipedia's open API source.
+    Title: (title) refers to the title of the article.
+    Language: (lang) refers to the lang we want the content to display.
+    """
+    
+    encoded_title = urllib.parse.quote(title)
+    url = f"https://{lang}.wikipedia.org/api/rest_v1/page/html/{encoded_title}"
+
+    try:
+        with httpx.Client() as client:
+            response = client.get(url)
+
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            print(f"This is the response status: {response.status_code}")
+
+            first_paragraph = soup.find('p')
+
+            print(f"First paragraph: {first_paragraph}")
+
+            return first_paragraph.text if first_paragraph else "No content found."
+        else:
+            return f"Error: {response.status_code} - {response.text}"
+
+    except httpx.RequestError as e:
+        return f"There was a network error: {e}"
 
 @app.route("/wikipedia/<title>", methods=['GET'])
 def handle_get_data(title):
     lang = request.args.get('lang', default='en')
 
-    ans = get_content(title, lang)
-    if ans is None:
-        return "There was issue with the content"
+    result = get_content(title, lang)
+    if 'error' in result:
+        return jsonify({"error": result}), 500
 
-    return True 
+    return jsonify({"content": result})
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=SERVICE_POST ,debug=True)
+    from gevent.pywsgi import WSGIServer
+    # Use Gevent to run Flask as a server handling async operations in the background
+    http_server = WSGIServer(('0.0.0.0', int(SERVICE_POST)), app)
+    http_server.serve_forever()
